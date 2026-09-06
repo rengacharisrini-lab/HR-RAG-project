@@ -1,0 +1,72 @@
+# service.yaml — Cloud Run declarative service definition (Knative format).
+#
+# Deploy with:
+#   gcloud run services replace service.yaml --region=us-central1
+#
+# Prerequisites:
+#   1. Build & push the image (see readme.md "Deploying to Google Cloud Run").
+#   2. Create a secret for your OpenAI key:
+#        gcloud secrets create hr-chatbot-openai-key --replication-policy="automatic"
+#        printf "sk-..." | gcloud secrets versions add hr-chatbot-openai-key --data-file=-
+#   3. (Optional) If you use LangSmith tracing, create a secret for it too:
+#        gcloud secrets create hr-chatbot-langchain-key --replication-policy="automatic"
+#        printf "ls__..." | gcloud secrets versions add hr-chatbot-langchain-key --data-file=-
+#   4. Grant the Cloud Run runtime service account access to each secret:
+#        gcloud secrets add-iam-policy-binding hr-chatbot-openai-key \
+#          --member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
+#          --role="roles/secretmanager.secretAccessor"
+#   5. Replace YOUR_PROJECT_ID below with your actual GCP project ID.
+
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: hr-support-chatbot
+  labels:
+    app: hr-support-chatbot
+spec:
+  template:
+    metadata:
+      annotations:
+        # Cap the number of container instances to control cost.
+        autoscaling.knative.dev/maxScale: "3"
+        autoscaling.knative.dev/minScale: "0"
+    spec:
+      containerConcurrency: 20
+      timeoutSeconds: 300
+      containers:
+        - image: gcr.io/YOUR_PROJECT_ID/hr-support-chatbot:latest
+          ports:
+            - name: http1
+              containerPort: 8080
+          env:
+            - name: MODEL
+              value: "gpt-4o-mini"
+            - name: OPENAI_API_BASE
+              value: "https://api.openai.com/v1"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: hr-chatbot-openai-key
+                  key: "latest"
+            # Optional LangSmith tracing — set to "true" and add the secret below if you use it.
+            - name: LANGCHAIN_TRACING_V2
+              value: "false"
+            # - name: LANGCHAIN_API_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: hr-chatbot-langchain-key
+            #       key: "latest"
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          startupProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+  traffic:
+    - percent: 100
+      latestRevision: true
